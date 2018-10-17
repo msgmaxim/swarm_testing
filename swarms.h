@@ -10,9 +10,23 @@
 using pub_key = std::string;
 using SwarmID = uint64_t;
 
+constexpr size_t MAX_SWARM_SIZE = 10;
+// if a swarm has strictly less nodes than this, it is considered unhealthy
+// and nearby swarms will mirror it's data. It will disappear, and is already considered gone.
+constexpr size_t MIN_SWARM_SIZE = 4;
+
 struct Stats {
     size_t inactive_count = 0; /// nodes not participating in an "active" swarm
     size_t movements = 0; /// difference in swarm composition compared to previous (if existed)
+
+};
+
+struct lifetime_stats
+{
+  int num_times_swarm_died; // deregistration kill a swarm
+  int num_times_nodes_stolen;
+  int last_swarm_count;
+  int num_swarm_count_changes;
 };
 
 struct service_node_info {
@@ -41,6 +55,9 @@ public:
 
 struct swarm_jcktm
 {
+    Stats stats;
+    lifetime_stats lifetime_stat;
+
     std::map<public_key, service_node_info> m_service_nodes_infos;
 
     enum struct add_low_count_swarms { no, yes, };
