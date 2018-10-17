@@ -1,7 +1,7 @@
 #include "swarms.h"
 #include <iostream>
 #include <vector>
-#include <random>
+#include "utils.h"
 
 constexpr size_t MAX_SWARM_SIZE = 10; /// deisred
 // We never create a new swarm unless there are SWARM_BUFFER extra nodes
@@ -10,29 +10,6 @@ constexpr size_t SWARM_BUFFER = 4;
 // if a swarm has strictly less nodes than this, it is considered unhealthy
 // and nearby swarms will mirror it's data. It will disappear, and is already considered gone.
 constexpr size_t MIN_SWARM_SIZE = 4;
-
-static uint64_t uniform_distribution_portable(std::mt19937_64& mersenne_twister, uint64_t n)
-{
-  uint64_t secureMax = mersenne_twister.max() - mersenne_twister.max() % n;
-  uint64_t x;
-  do
-    x = mersenne_twister();
-  while (x >= secureMax);
-  return x / (secureMax / n);
-}
-
-template<typename T>
-void loki_shuffle(std::vector<T>& a, uint64_t seed)
-{
-if (a.size() <= 1) return;
-std::mt19937_64 mersenne_twister(seed);
-for (size_t i = 1; i < a.size(); i++)
-{
-    size_t j = (size_t)uniform_distribution_portable(mersenne_twister, i+1);
-    if (i != j)
-    std::swap(a[i], a[j]);
-}
-}
 
 std::vector<uint64_t> get_swarm_ids(const std::map<pub_key, service_node_info>& m_service_nodes_infos)
 {
@@ -67,15 +44,17 @@ swarms::swarms(std::map<pub_key, service_node_info>& infos)
   : m_service_nodes_infos(infos)
 {}
 
-void swarms::process_reg(const std::string& hash, const std::string& pk) {
-    std::cout << "process register\n";
+void swarms::process_reg(const std::string& pk) {
+    m_service_nodes_infos[pk].swarm_id = 0; // assign to queue
+    std::cout << "process register: " << pk << std::endl;
 }
 
-void swarms::process_dereg() {
-    std::cout << "process DEregister\n";
+void swarms::process_dereg(const std::string& pk) {
+    std::cout << "process DEREGISTER: " << pk << std::endl;
+    assert(m_service_nodes_infos.find(pk) != m_service_nodes_infos.end());
 }
 
-void swarms::process_block(const std::string& hash) {
+void swarms::process_block(const std::string& hash, Stats& stats) {
     std::cout << "--- process block ---\n";
 
     std::map<SwarmID, size_t> swarm_sizes;
@@ -161,6 +140,6 @@ void swarms::process_block(const std::string& hash) {
       
     }
 
-
+    stats.inactive_count += swarm_queue.size();
 
 }
