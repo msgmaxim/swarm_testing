@@ -108,7 +108,7 @@ std::vector<Event> generate_random_events() {
 
 /// 1. randomness at swarm creation
 /// 2. shuffling of nodes between swarms
-/// 3. number of "inactive" nodes
+/// 3. number of "inactive" nodes - done
 /// 4. amount of data migration (don't know how to test yet)
 
 int main() {
