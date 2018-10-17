@@ -3,6 +3,7 @@
 #include <iostream>
 #include <numeric>
 #include <string.h>
+#include <algorithm>
 
 #include "swarms.h"
 #include "utils.h"

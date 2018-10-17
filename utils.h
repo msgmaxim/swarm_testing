@@ -27,7 +27,11 @@ int      choose_n           (int max_val_not_inclusive);
 string64 byte32_to_string   (byte32 const &byte);
 
 inline std::ostream& operator<<(std::ostream& o, const ec_scalar& s) {
+#if defined(_WIN32) || defined(_WIN64)
     return o << byte32_to_string(s).data;
+#else
+    return o << std::string(byte32_to_string(s).data, 65);
+#endif
 }
 
 static uint64_t uniform_distribution_portable(std::mt19937_64& mersenne_twister, uint64_t n)
