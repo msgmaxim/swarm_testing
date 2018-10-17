@@ -3,23 +3,27 @@
 #include <fstream>
 #include <iostream>
 #include <set>
+#include <mutex>
 
+#include <string.h>
 #include "swarms.h"
 #include "utils.h"
 
+pcg32_random_t global_rng = {0, 0x70eae936f6bca02d};
+
 enum class EventType {
-    REG, DEREG
+    NONE, REG, DEREG
 };
 
 struct Event
 {
-    EventType type;
-    uint64_t height; /// block height
-    std::string hash; /// block hash
-    std::string pk; /// sn pub key
+    EventType  type;
+    uint64_t   height;
+    hash32     block_hash;
+    public_key snode_pubkey;
 };
 
-
+#if 0
 std::vector<Event> read_events(const char* path) {
 
     std::vector<Event> result;
@@ -55,6 +59,7 @@ std::vector<Event> read_events(const char* path) {
 
     return result;
 }
+#endif
 
 static int get_random_sn_id(std::mt19937_64& mt, const std::set<int>& registered) {
 
@@ -75,27 +80,33 @@ std::vector<Event> generate_random_events() {
 
     std::mt19937_64 mt(0);
 
-    std::set<int> registered;
-
+    std::vector<public_key> registered_snodes;
     for (uint64_t idx = 0; idx < 10000; ++idx) {
 
         auto dice = uniform_distribution_portable(mt, 100);
 
+        Event new_event      = {};
+        new_event.type       = EventType::NONE;
+        new_event.height     = idx;
+        new_event.block_hash = generate_block_hash();
+
         /// make register every 10th block
         if (dice % 10 == 0) {
-
-            auto rnd_idx = get_random_sn_id(mt, registered);
-            registered.insert(rnd_idx);
-            result.push_back({EventType::REG, idx, std::to_string(idx), std::to_string(rnd_idx)});
+            new_event.type = EventType::REG;
+            secret_key dummy_key = {};
+            generate_keys(new_event.snode_pubkey, dummy_key);
+            registered_snodes.push_back(new_event.snode_pubkey);
+            result.push_back(new_event);
         }
 
         /// make a deregister every 20th block
-        if (!registered.empty() && dice % 20 == 0) {
-            auto rnd_idx = uniform_distribution_portable(mt, registered.size());
-            auto it = registered.begin();
-            std::advance(it, rnd_idx);
-            result.push_back({EventType::DEREG, idx, std::to_string(idx), std::to_string(*it)});
-            registered.erase(it);
+        if (!registered_snodes.empty() && dice % 20 == 0) {
+            new_event.type = EventType::DEREG;
+            auto rnd_idx = uniform_distribution_portable(mt, registered_snodes.size());
+            auto it = registered_snodes.begin() + rnd_idx;
+            new_event.snode_pubkey = *it;
+            registered_snodes.erase(it);
+            result.push_back(new_event);
         }
 
     }
@@ -105,8 +116,8 @@ std::vector<Event> generate_random_events() {
 }
 
 
-size_t count_movements(const std::map<pub_key, service_node_info>& prev,
-                       const std::map<pub_key, service_node_info>& cur)
+size_t count_movements(const std::map<public_key, service_node_info>& prev,
+                       const std::map<public_key, service_node_info>& cur)
 {
 
   size_t movements = 0;
@@ -135,15 +146,29 @@ size_t count_movements(const std::map<pub_key, service_node_info>& prev,
 
 int main() {
 
-    std::map<pub_key, service_node_info> m_service_nodes_infos;
+   {
+     std::vector<Event> events = generate_random_events();
+     swarm_jcktm jcktm = {};
+     for (Event &event : events)
+     {
+       if (event.type == EventType::REG)
+       {
+         jcktm.add_new_snode_to_swarm(event.snode_pubkey, event.block_hash, 0);
+       }
+       else
+       {
+         jcktm.remove_snode_from_swarm(event.snode_pubkey);
+       }
+     }
+   }
+
+    std::map<public_key, service_node_info> m_service_nodes_infos;
     swarms swarms_(m_service_nodes_infos);
 
     // const auto events = read_events("sn_registration_data.txt");
     const auto events = generate_random_events();
 
-
     std::vector<Stats> stats;
-
     uint64_t prev_h = 0;
     for (const auto e : events) {
         
@@ -152,9 +177,8 @@ int main() {
             if (prev_h != 0) {
                 stats.push_back({});
 
-
                 auto prev_state = m_service_nodes_infos;
-                swarms_.process_block(e.hash, stats.back());
+                swarms_.process_block(e.block_hash, stats.back());
 
                 stats.back().movements = count_movements(prev_state, m_service_nodes_infos);
             }
@@ -163,11 +187,11 @@ int main() {
         }
 
         if (e.type == EventType::REG) {
-            m_service_nodes_infos.insert({e.pk, {}});
-            swarms_.process_reg(e.pk);
-        } else {
-            swarms_.process_dereg(e.pk);
-            m_service_nodes_infos.erase(e.pk);
+            m_service_nodes_infos.insert({e.snode_pubkey, {}});
+            swarms_.process_reg(e.snode_pubkey);
+        } else if (e.type == EventType::DEREG) {
+            swarms_.process_dereg(e.snode_pubkey);
+            m_service_nodes_infos.erase(e.snode_pubkey);
         }
     }
 
