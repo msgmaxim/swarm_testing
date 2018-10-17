@@ -7,7 +7,7 @@ using SwarmID = uint64_t;
 
 struct Stats {
     size_t inactive_count = 0; /// nodes not participating in an "active" swarm
-    size_t movements = 0; /// difference in swarm composition 
+    size_t movements = 0; /// difference in swarm composition compared to previous (if existed)
 };
 
 struct service_node_info {

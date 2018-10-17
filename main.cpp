@@ -104,6 +104,28 @@ std::vector<Event> generate_random_events() {
 
 }
 
+
+size_t count_movements(const std::map<pub_key, service_node_info>& prev,
+                       const std::map<pub_key, service_node_info>& cur)
+{
+
+  size_t movements = 0;
+  /// count all nodes in prev that now have different swarm_id
+  for (const auto& entry : prev) {
+
+      /// Note: in my implementation of the queue, swarm_id of 0 represents the queue, not a real swarm
+      if (entry.second.swarm_id == 0) continue;
+
+      const auto pk = entry.first;
+      if (cur.find(pk) != cur.end() && cur.at(pk).swarm_id != entry.second.swarm_id) {
+          movements++;
+      }
+  }
+
+  return movements;
+
+}
+
 /// Thing to optimise for in swarms:
 
 /// 1. randomness at swarm creation
@@ -129,7 +151,12 @@ int main() {
 
             if (prev_h != 0) {
                 stats.push_back({});
+
+
+                auto prev_state = m_service_nodes_infos;
                 swarms_.process_block(e.hash, stats.back());
+
+                stats.back().movements = count_movements(prev_state, m_service_nodes_infos);
             }
 
             prev_h = e.height;
@@ -145,11 +172,17 @@ int main() {
     }
 
 
-    const auto total_inactive = std::accumulate(stats.begin(), stats.end(), 0, [](int acc, Stats& s) {
-        return acc + s.inactive_count;
-    });
+    /// accumulate stats
+
+    size_t total_inactive = 0;
+    size_t total_movements = 0;
+    for (const auto& s : stats) {
+        total_inactive += s.inactive_count;
+        total_movements += s.movements;
+    }
 
     std::cout << "inactive nodes mean: " << total_inactive / stats.size() << std::endl;
+    std::cout << "total movements: " << total_movements << std::endl;
 
 
 
