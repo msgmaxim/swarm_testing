@@ -1,6 +1,11 @@
-#include "swarms.h"
 #include <iostream>
 #include <vector>
+#include <random>
+#include <cstring>
+#include <cassert>
+#include <algorithm>
+
+#include "swarms.h"
 #include "utils.h"
 
 constexpr size_t MAX_SWARM_SIZE = 10; /// deisred
@@ -11,7 +16,7 @@ constexpr size_t SWARM_BUFFER = 4;
 // and nearby swarms will mirror it's data. It will disappear, and is already considered gone.
 constexpr size_t MIN_SWARM_SIZE = 4;
 
-std::vector<uint64_t> get_swarm_ids(const std::map<pub_key, service_node_info>& m_service_nodes_infos)
+std::vector<uint64_t> get_swarm_ids(const std::map<public_key, service_node_info>& m_service_nodes_infos)
 {
   std::map<uint64_t, size_t> counts;
   for (const auto& entry : m_service_nodes_infos)
@@ -23,7 +28,7 @@ std::vector<uint64_t> get_swarm_ids(const std::map<pub_key, service_node_info>& 
   return swarm_ids;
 }
 
-static uint64_t get_new_node_swarm_id(uint64_t seed, const std::map<pub_key, service_node_info>& sn_infos)
+static uint64_t get_new_node_swarm_id(uint64_t seed, const std::map<public_key, service_node_info>& sn_infos)
 {
   // XXX XXX XXX improvement proposal: have the swarm id be "remembered" from
   // the last time, if the new node was already registered before. This would
@@ -40,25 +45,25 @@ static uint64_t get_new_node_swarm_id(uint64_t seed, const std::map<pub_key, ser
   return swarm_ids.size();
 }
 
-swarms::swarms(std::map<pub_key, service_node_info>& infos)
+swarms::swarms(std::map<public_key, service_node_info>& infos)
   : m_service_nodes_infos(infos)
 {}
 
-void swarms::process_reg(const std::string& pk) {
+void swarms::process_reg(const public_key& pk) {
     m_service_nodes_infos[pk].swarm_id = 0; // assign to queue
-    std::cout << "process register: " << pk << std::endl;
+    std::cout << "process register: " << byte32_to_string(pk).data << std::endl;
 }
 
-void swarms::process_dereg(const std::string& pk) {
-    std::cout << "process DEREGISTER: " << pk << std::endl;
+void swarms::process_dereg(const public_key& pk) {
+    std::cout << "process DEREGISTER: " << byte32_to_string(pk).data << std::endl;
     assert(m_service_nodes_infos.find(pk) != m_service_nodes_infos.end());
 }
 
-void swarms::process_block(const std::string& hash, Stats& stats) {
+void swarms::process_block(const hash32& hash, Stats& stats) {
     std::cout << "--- process block ---\n";
 
     std::map<SwarmID, size_t> swarm_sizes;
-    std::vector<pub_key> swarm_queue;
+    std::vector<public_key> swarm_queue;
 
     for (const auto& entry : m_service_nodes_infos) {
       const auto id = entry.second.swarm_id;
@@ -82,7 +87,7 @@ void swarms::process_block(const std::string& hash, Stats& stats) {
 
 
     uint64_t seed = 0;
-    std::memcpy(&seed, hash.c_str(), sizeof(seed));
+    std::memcpy(&seed, hash.data, sizeof(seed));
     std::mt19937_64 mersenne_twister(seed);
 
     std::vector<SwarmID> swarms_to_decommision;
@@ -139,7 +144,119 @@ void swarms::process_block(const std::string& hash, Stats& stats) {
     for (auto swarm : swarms_to_decommision) {
       
     }
-
     stats.inactive_count += swarm_queue.size();
+}
 
+std::vector<swarm_info> swarm_jcktm::get_swarms(add_low_count_swarms add) const
+{
+  std::vector<swarm_info> valid_swarms;
+
+  std::map<uint64_t, size_t> swarm_id_and_size;
+  for (const auto& entry : m_service_nodes_infos)
+    swarm_id_and_size[entry.second.swarm_id]++;
+
+  valid_swarms.reserve(swarm_id_and_size.size());
+  for (const auto& entry : swarm_id_and_size)
+  {
+    bool add_swarm = true;
+    if (add == add_low_count_swarms::no)
+      add_swarm = entry.second >= MIN_SWARM_SIZE;
+
+    if (add_swarm)
+    {
+      swarm_info swarm = {};
+      swarm.id         = entry.first;
+      swarm.size       = static_cast<uint16_t>(entry.second);
+      valid_swarms.push_back(swarm);
+    }
+  }
+
+  return valid_swarms;
+}
+
+void swarm_jcktm::add_new_snode_to_swarm(public_key const &snode_public_key, hash32 const &block_hash, uint64_t tx_index)
+{
+    service_node_info result = {};
+
+    // get_new_node_swarm_id
+    {
+      std::vector<swarm_info> valid_swarms = this->get_swarms(add_low_count_swarms::no);
+      if (valid_swarms.empty())
+        return;
+
+      uint64_t seed = 0;
+      std::memcpy(&seed, block_hash.data, sizeof(seed));
+      seed += tx_index;
+
+      std::mt19937_64 mersenne_twister(seed);
+      const size_t swarm_index = (size_t)uniform_distribution_portable(mersenne_twister, valid_swarms.size());
+      result.swarm_id = valid_swarms[swarm_index].id;
+    }
+
+    m_service_nodes_infos[snode_public_key] = result;
+}
+
+void swarm_jcktm::remove_snode_from_swarm(public_key const &snode_key)
+{
+    uint64_t const swarm_id = m_service_nodes_infos[snode_key].swarm_id;
+
+    std::vector<swarm_info> all_swarms = this->get_swarms(add_low_count_swarms::yes);
+    swarm_info *starving_swarm = nullptr;
+    {
+      auto it = std::find_if(all_swarms.begin(), all_swarms.end(), [swarm_id](const swarm_info& swarm) {
+          return (swarm.id == swarm_id);
+      });
+      assert(it != all_swarms.end());
+      starving_swarm = &(*it);
+    }
+
+    // Steal nodes from the largest swarm and add to starving swarm
+    {
+      auto get_largest_swarm = [](std::vector<swarm_info> &swarms) -> swarm_info * {
+        if (swarms.size() == 0) return nullptr;
+
+        swarm_info *largest_swarm = &swarms[0];
+        for (swarm_info &check : swarms)
+        {
+          if (check.size > largest_swarm->size) largest_swarm = &check;
+        }
+
+        return largest_swarm;
+      };
+
+      for (swarm_info *largest_swarm = get_largest_swarm(all_swarms);
+           largest_swarm && largest_swarm->size > MIN_SWARM_SIZE;
+           largest_swarm = get_largest_swarm(all_swarms))
+      {
+        for (auto &it : m_service_nodes_infos) // Reassign node from largest swarm to starving swarm
+        {
+          service_node_info &snode = it.second;
+          if (snode.swarm_id == largest_swarm->id)
+          {
+            snode.swarm_id = starving_swarm->id;
+            --largest_swarm->size;
+            ++starving_swarm->size;
+            break;
+          }
+        }
+
+        if (starving_swarm->size >= MIN_SWARM_SIZE)
+        {
+          break;
+        }
+      }
+    }
+
+    if (starving_swarm->size < MIN_SWARM_SIZE)
+    {
+      // XXX XXX XXX XXX
+      // All nodes should fetch data from this swarm at this point only.
+      // The registered nodes will eventually disappear and after this point,
+      // it is already considered gone. It only exists to retrieve data from.
+      //
+      // XXX XXX XXX XXX
+      //         internship optimization hardfork idea:
+      //         when nodes have been decomissioned for more than 10 blocks,
+      //         move the nodes into new swarms immediately.
+    }
 }
