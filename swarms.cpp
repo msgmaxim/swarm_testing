@@ -8,13 +8,9 @@
 #include "swarms.h"
 #include "utils.h"
 
-constexpr size_t MAX_SWARM_SIZE = 10; /// deisred
 // We never create a new swarm unless there are SWARM_BUFFER extra nodes
 // available in the queue.
 constexpr size_t SWARM_BUFFER = 4;
-// if a swarm has strictly less nodes than this, it is considered unhealthy
-// and nearby swarms will mirror it's data. It will disappear, and is already considered gone.
-constexpr size_t MIN_SWARM_SIZE = 4;
 
 std::vector<uint64_t> get_swarm_ids(const std::map<public_key, service_node_info>& m_service_nodes_infos)
 {
@@ -149,18 +145,17 @@ void swarms::process_block(const hash32& hash, Stats& stats) {
 
 std::vector<swarm_info> swarm_jcktm::get_swarms(add_low_count_swarms add) const
 {
-  std::vector<swarm_info> valid_swarms;
-
   std::map<uint64_t, size_t> swarm_id_and_size;
-  for (const auto& entry : m_service_nodes_infos)
+  for (const auto &entry : m_service_nodes_infos)
     swarm_id_and_size[entry.second.swarm_id]++;
 
+  std::vector<swarm_info> valid_swarms;
   valid_swarms.reserve(swarm_id_and_size.size());
-  for (const auto& entry : swarm_id_and_size)
+
+  for (const auto &entry : swarm_id_and_size)
   {
-    bool add_swarm = true;
-    if (add == add_low_count_swarms::no)
-      add_swarm = entry.second >= MIN_SWARM_SIZE;
+    bool add_swarm                                 = true;
+    if (add == add_low_count_swarms::no) add_swarm = entry.second >= MIN_SWARM_SIZE;
 
     if (add_swarm)
     {
@@ -174,89 +169,129 @@ std::vector<swarm_info> swarm_jcktm::get_swarms(add_low_count_swarms add) const
   return valid_swarms;
 }
 
-void swarm_jcktm::add_new_snode_to_swarm(public_key const &snode_public_key, hash32 const &block_hash, uint64_t tx_index)
+void swarm_jcktm::add_new_snode_to_swarm(public_key const &snode_public_key,
+                                         hash32 const &block_hash,
+                                         uint64_t tx_index)
 {
-    service_node_info result = {};
-
-    // get_new_node_swarm_id
+  // get_new_node_swarm_id
+  std::vector<swarm_info> valid_swarms = this->get_swarms(add_low_count_swarms::no);
+  swarm_info *desired_swarm = nullptr;
+  {
+    if (!valid_swarms.empty())
     {
-      std::vector<swarm_info> valid_swarms = this->get_swarms(add_low_count_swarms::no);
-      if (valid_swarms.empty())
-        return;
+      uint64_t swarm_index_rng_seed = 0;
+      std::memcpy(&swarm_index_rng_seed, block_hash.data, sizeof(swarm_index_rng_seed));
+      swarm_index_rng_seed += tx_index;
 
-      uint64_t seed = 0;
-      std::memcpy(&seed, block_hash.data, sizeof(seed));
-      seed += tx_index;
+      std::mt19937_64 swarm_index_rng(swarm_index_rng_seed);
+      const size_t swarm_index = (size_t)uniform_distribution_portable(swarm_index_rng, valid_swarms.size());
 
-      std::mt19937_64 mersenne_twister(seed);
-      const size_t swarm_index = (size_t)uniform_distribution_portable(mersenne_twister, valid_swarms.size());
-      result.swarm_id = valid_swarms[swarm_index].id;
+      desired_swarm = &valid_swarms[swarm_index];
     }
+  }
 
-    m_service_nodes_infos[snode_public_key] = result;
+  service_node_info result                = {};
+  result.swarm_id                         = (desired_swarm) ? desired_swarm->id : 0;
+  m_service_nodes_infos[snode_public_key] = result;
+
+  // Check overflow of swarm
+  if (desired_swarm && ++desired_swarm->size > MAX_SWARM_SIZE)
+  {
+    uint64_t overflow_rng_seed = 0;
+    std::memcpy(&overflow_rng_seed, block_hash.data, sizeof(overflow_rng_seed));
+    overflow_rng_seed += desired_swarm->id;
+    std::mt19937_64 overflow_rng(overflow_rng_seed);
+
+    bool move_to_new_swarm = (bool)uniform_distribution_portable(overflow_rng, 2);
+    uint64_t new_swarm_id  = uniform_distribution_portable(overflow_rng, UINT64_MAX);
+
+    for (auto &entry : m_service_nodes_infos)
+    {
+      if (entry.second.swarm_id == desired_swarm->id)
+      {
+        if (move_to_new_swarm)
+        {
+            entry.second.swarm_id = new_swarm_id;
+            ++this->stats.movements;
+        }
+        move_to_new_swarm = !move_to_new_swarm;
+      }
+    }
+  }
 }
 
 void swarm_jcktm::remove_snode_from_swarm(public_key const &snode_key)
 {
-    uint64_t const swarm_id = m_service_nodes_infos[snode_key].swarm_id;
+  assert(m_service_nodes_infos.find(snode_key) != m_service_nodes_infos.end());
+  uint64_t const swarm_id = m_service_nodes_infos[snode_key].swarm_id;
+  m_service_nodes_infos.erase(snode_key);
 
-    std::vector<swarm_info> all_swarms = this->get_swarms(add_low_count_swarms::yes);
-    swarm_info *starving_swarm = nullptr;
+  std::vector<swarm_info> all_swarms = this->get_swarms(add_low_count_swarms::yes);
+  swarm_info *starving_swarm         = nullptr;
+  {
+    auto it = std::find_if(all_swarms.begin(),
+                           all_swarms.end(),
+                           [swarm_id](const swarm_info &swarm) { return (swarm.id == swarm_id); });
+
+    if (it == all_swarms.end()) // last node in swarm was deleted
     {
-      auto it = std::find_if(all_swarms.begin(), all_swarms.end(), [swarm_id](const swarm_info& swarm) {
-          return (swarm.id == swarm_id);
-      });
-      assert(it != all_swarms.end());
-      starving_swarm = &(*it);
+        ++this->lifetime_stat.num_times_swarm_died;
+        return;
     }
 
-    // Steal nodes from the largest swarm and add to starving swarm
-    {
-      auto get_largest_swarm = [](std::vector<swarm_info> &swarms) -> swarm_info * {
-        if (swarms.size() == 0) return nullptr;
+    starving_swarm = &(*it);
+  }
 
-        swarm_info *largest_swarm = &swarms[0];
-        for (swarm_info &check : swarms)
-        {
-          if (check.size > largest_swarm->size) largest_swarm = &check;
-        }
+  // Steal nodes from the largest swarm and add to starving swarm
+  {
+    auto get_largest_swarm = [](std::vector<swarm_info> &swarms) -> swarm_info * {
+      if (swarms.size() == 0) return nullptr;
 
-        return largest_swarm;
-      };
-
-      for (swarm_info *largest_swarm = get_largest_swarm(all_swarms);
-           largest_swarm && largest_swarm->size > MIN_SWARM_SIZE;
-           largest_swarm = get_largest_swarm(all_swarms))
+      swarm_info *largest_swarm = &swarms[0];
+      for (swarm_info &check : swarms)
       {
-        for (auto &it : m_service_nodes_infos) // Reassign node from largest swarm to starving swarm
-        {
-          service_node_info &snode = it.second;
-          if (snode.swarm_id == largest_swarm->id)
-          {
-            snode.swarm_id = starving_swarm->id;
-            --largest_swarm->size;
-            ++starving_swarm->size;
-            break;
-          }
-        }
+        if (check.size > largest_swarm->size) largest_swarm = &check;
+      }
 
-        if (starving_swarm->size >= MIN_SWARM_SIZE)
+      return largest_swarm;
+    };
+
+    for (swarm_info *largest_swarm = get_largest_swarm(all_swarms);
+         largest_swarm && largest_swarm->size > MIN_SWARM_SIZE;
+         largest_swarm = get_largest_swarm(all_swarms))
+    {
+      for (auto &it : m_service_nodes_infos) // Reassign node from largest swarm to starving swarm
+      {
+        service_node_info &snode = it.second;
+        if (snode.swarm_id == largest_swarm->id)
         {
+          ++this->lifetime_stat.num_times_nodes_stolen;
+          ++this->stats.movements;
+
+          snode.swarm_id = starving_swarm->id;
+          --largest_swarm->size;
+          ++starving_swarm->size;
           break;
         }
       }
-    }
 
-    if (starving_swarm->size < MIN_SWARM_SIZE)
-    {
-      // XXX XXX XXX XXX
-      // All nodes should fetch data from this swarm at this point only.
-      // The registered nodes will eventually disappear and after this point,
-      // it is already considered gone. It only exists to retrieve data from.
-      //
-      // XXX XXX XXX XXX
-      //         internship optimization hardfork idea:
-      //         when nodes have been decomissioned for more than 10 blocks,
-      //         move the nodes into new swarms immediately.
+      if (starving_swarm->size >= MIN_SWARM_SIZE)
+      {
+        break;
+      }
     }
+  }
+
+  if (starving_swarm->size < MIN_SWARM_SIZE)
+  {
+    // XXX XXX XXX XXX
+    // All nodes should fetch data from this swarm at this point only.
+    // The registered nodes will eventually disappear and after this point,
+    // it is already considered gone. It only exists to retrieve data from.
+    //
+    // XXX XXX XXX XXX
+    //         internship optimization hardfork idea:
+    //         when nodes have been decomissioned for more than 10 blocks,
+    //         move the nodes into new swarms immediately.
+  }
 }

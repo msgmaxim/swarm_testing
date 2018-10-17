@@ -1,7 +1,9 @@
 #include "utils.h"
 #include "crypto-ops.h"
 
-string64 byte32_to_string(byte32 byte)
+pcg32_random_t global_rng = {0, 0x70eae936f6bca02d};
+
+string64 byte32_to_string(byte32 const &byte)
 {
   char table[16];
   table[0] = '0'; table[1] = '1'; table[2] = '2'; table[3] = '3'; table[4] = '4';
@@ -15,8 +17,8 @@ string64 byte32_to_string(byte32 byte)
   for (int i = 0, index64 = 0; i < 32; i++)
   {
     char ch = byte.data[i];
-    char ch1 = (ch & 0xF);
-    char ch2 = (ch >> 4) & 0xF;
+    char ch1 = (ch >> 4) & 0xF;
+    char ch2 = (ch & 0xF);
     result.data[index64++] = table[ch1];
     result.data[index64++] = table[ch2];
   }
@@ -74,10 +76,17 @@ uint32_t pcg32_random_r(pcg32_random_t* rng)
     return (xorshifted >> rot) | (xorshifted << ((-rot) & 31));
 }
 
-bool choose_100(int percent_chance_to_execute)
+bool percent_chance(int percent_chance_to_execute)
 {
   uint32_t random_number = pcg32_random_r(&global_rng);
   uint32_t choose100     = random_number % 100;
   bool result            = choose100 <= percent_chance_to_execute;
+  return result;
+}
+
+int choose_n(int max_val_not_inclusive)
+{
+  uint32_t random_number = pcg32_random_r(&global_rng);
+  uint32_t result        = random_number % max_val_not_inclusive;
   return result;
 }
