@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <string.h>
+#include <unordered_map>
 #include "utils.h"
 
 using pub_key = std::string;
@@ -31,6 +32,7 @@ struct lifetime_stats
 
 struct service_node_info {
     SwarmID swarm_id;
+    int num_times_moved_swarms;
 };
 
 struct swarm_info
@@ -60,12 +62,14 @@ struct swarm_jcktm
     Stats stats;
     lifetime_stats lifetime_stat;
 
-    std::map<public_key, service_node_info> m_service_nodes_infos;
+    std::map<public_key, service_node_info>    m_service_nodes_infos;
+    std::map<SwarmID, std::vector<public_key>> m_swarms;
 
     enum struct add_low_count_swarms { no, yes, };
     std::vector<swarm_info> get_swarms               (add_low_count_swarms add) const;
-    SwarmID                 add_new_snode_to_swarm   (public_key const &snode_public_key, hash32 const &block_hash, uint64_t tx_index);
-    SwarmID                 remove_snode_from_swarm  (const public_key& snode_key);
+    void                    add_new_snode_to_swarm   (public_key const &snode_public_key, hash32 const &block_hash, uint64_t tx_index);
+    void                    remove_snode_from_swarm  (const public_key& snode_key);
+    void                    after_all_add_and_remove_swarms(hash32 const &block_hash);
 };
 
 #endif // SWARMS_H

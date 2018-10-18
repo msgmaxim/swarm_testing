@@ -215,64 +215,54 @@ std::vector<swarm_info> swarm_jcktm::get_swarms(add_low_count_swarms add) const
   return valid_swarms;
 }
 
-SwarmID swarm_jcktm::add_new_snode_to_swarm(public_key const &snode_public_key,
-                                            hash32 const &block_hash,
-                                            uint64_t tx_index)
+void swarm_jcktm::add_new_snode_to_swarm(public_key const &snode_public_key,
+                                         hash32 const &block_hash,
+                                         uint64_t tx_index)
 {
-  std::vector<swarm_info> valid_swarms = this->get_swarms(add_low_count_swarms::no);
-  swarm_info *desired_swarm = nullptr;
+  uint64_t swarm_id = 0;
+  std::vector<public_key> *swarm_nodes = &m_swarms[swarm_id];
+
+  if (!m_swarms.empty())
   {
-    if (!valid_swarms.empty())
-    {
-      uint64_t swarm_index_rng_seed = 0;
-      std::memcpy(&swarm_index_rng_seed, block_hash.data, sizeof(swarm_index_rng_seed));
-      swarm_index_rng_seed += tx_index;
+    uint64_t rng_seed = 0;
+    std::memcpy(&rng_seed, block_hash.data, sizeof(rng_seed));
+    rng_seed += tx_index;
 
-      std::mt19937_64 swarm_index_rng(swarm_index_rng_seed);
-      const size_t swarm_index = (size_t)uniform_distribution_portable(swarm_index_rng, valid_swarms.size());
+    std::mt19937_64 rng(rng_seed);
+    size_t desired_index = (size_t)uniform_distribution_portable(rng, m_swarms.size());
 
-      desired_swarm = &valid_swarms[swarm_index];
-    }
+    auto it = m_swarms.begin();
+    for (int i = 0; i < desired_index; ++it, ++i) {}
+    swarm_id    = it->first;
+    swarm_nodes = &it->second;
   }
 
-  service_node_info result                = {};
-  result.swarm_id                         = (desired_swarm) ? desired_swarm->id : 0;
-  m_service_nodes_infos[snode_public_key] = result;
+  swarm_nodes->push_back(snode_public_key);
+  m_service_nodes_infos[snode_public_key].swarm_id = swarm_id;
 
-  // Check overflow of swarm
-  if (desired_swarm && ++desired_swarm->size > MAX_SWARM_SIZE)
-  {
-    uint64_t overflow_rng_seed = 0;
-    std::memcpy(&overflow_rng_seed, block_hash.data, sizeof(overflow_rng_seed));
-    overflow_rng_seed += desired_swarm->id;
-    std::mt19937_64 overflow_rng(overflow_rng_seed);
+  int total_nodes_in_swarm = 0;
+  for (auto const &it : m_swarms)
+    total_nodes_in_swarm += it.second.size();
 
-    bool move_to_new_swarm = (bool)uniform_distribution_portable(overflow_rng, 2);
-    uint64_t new_swarm_id  = uniform_distribution_portable(overflow_rng, UINT64_MAX);
-
-    for (auto &entry : m_service_nodes_infos)
-    {
-      if (entry.second.swarm_id == desired_swarm->id)
-      {
-        if (move_to_new_swarm)
-        {
-            entry.second.swarm_id = new_swarm_id;
-            ++this->stats.movements;
-        }
-        move_to_new_swarm = !move_to_new_swarm;
-      }
-    }
-  }
-
-  return m_service_nodes_infos[snode_public_key].swarm_id;
+  assert(m_service_nodes_infos.size() == total_nodes_in_swarm);
 }
 
-SwarmID swarm_jcktm::remove_snode_from_swarm(public_key const &snode_key)
+void swarm_jcktm::remove_snode_from_swarm(public_key const &snode_key)
 {
   assert(m_service_nodes_infos.find(snode_key) != m_service_nodes_infos.end());
-  uint64_t const swarm_id = m_service_nodes_infos[snode_key].swarm_id;
+
+  SwarmID swarm_id = m_service_nodes_infos[snode_key].swarm_id;
   m_service_nodes_infos.erase(snode_key);
 
+  std::vector<public_key> *swarm_nodes = &m_swarms[swarm_id];
+  auto it = std::find_if(swarm_nodes->begin(), swarm_nodes->end(), [snode_key](const public_key &check) {
+      return snode_key == check;
+  });
+
+  assert(it != swarm_nodes->end());
+  swarm_nodes->erase(it);
+
+#if 0
   std::vector<swarm_info> all_swarms = this->get_swarms(add_low_count_swarms::yes);
   swarm_info *starving_swarm         = nullptr;
   {
@@ -289,46 +279,6 @@ SwarmID swarm_jcktm::remove_snode_from_swarm(public_key const &snode_key)
     starving_swarm = &(*it);
   }
 
-  // Steal nodes from the largest swarm and add to starving swarm
-  {
-    auto get_largest_swarm = [](std::vector<swarm_info> &swarms) -> swarm_info * {
-      if (swarms.size() == 0) return nullptr;
-
-      swarm_info *largest_swarm = &swarms[0];
-      for (swarm_info &check : swarms)
-      {
-        if (check.size > largest_swarm->size) largest_swarm = &check;
-      }
-
-      return largest_swarm;
-    };
-
-    for (swarm_info *largest_swarm = get_largest_swarm(all_swarms);
-         largest_swarm && largest_swarm->size > MIN_SWARM_SIZE;
-         largest_swarm = get_largest_swarm(all_swarms))
-    {
-      for (auto &it : m_service_nodes_infos) // Reassign node from largest swarm to starving swarm
-      {
-        service_node_info &snode = it.second;
-        if (snode.swarm_id == largest_swarm->id)
-        {
-          ++this->lifetime_stat.num_times_nodes_stolen;
-          ++this->stats.movements;
-
-          snode.swarm_id = starving_swarm->id;
-          --largest_swarm->size;
-          ++starving_swarm->size;
-          break;
-        }
-      }
-
-      if (starving_swarm->size >= MIN_SWARM_SIZE)
-      {
-        break;
-      }
-    }
-  }
-
   if (starving_swarm->size < MIN_SWARM_SIZE)
   {
     // XXX XXX XXX XXX
@@ -341,6 +291,126 @@ SwarmID swarm_jcktm::remove_snode_from_swarm(public_key const &snode_key)
     //         when nodes have been decomissioned for more than 10 blocks,
     //         move the nodes into new swarms immediately.
   }
+#endif
+}
 
-  return swarm_id;
+void swarm_jcktm::after_all_add_and_remove_swarms(hash32 const &block_hash)
+{
+  struct swarm_id_and_nodes
+  {
+    SwarmID id;
+    std::vector<public_key> *nodes;
+  };
+
+  std::vector<swarm_id_and_nodes> starving_swarms;
+  std::vector<swarm_id_and_nodes> fat_swarms;
+  for (auto it : m_swarms)
+  {
+    swarm_id_and_nodes swarm = {};
+    swarm.id    = it.first;
+    swarm.nodes = &it.second;
+
+    if (swarm.nodes->size() < MIN_SWARM_SIZE)
+      starving_swarms.push_back(swarm);
+    else if (swarm.nodes->size() > MIN_SWARM_SIZE)
+      fat_swarms.push_back(swarm);
+  }
+
+  enum struct find_type
+  {
+    smallest_swarm,
+    largest_swarm,
+  };
+
+  auto find_swarm = [](find_type type, std::vector<swarm_id_and_nodes> &swarms) -> swarm_id_and_nodes * {
+    if (swarms.size() == 0) return nullptr;
+
+    swarm_id_and_nodes *result = &swarms[0];
+    for (size_t i = 1; i < swarms.size(); ++i)
+    {
+      swarm_id_and_nodes *check = &swarms[i];
+      if (type == find_type::smallest_swarm) { if (check->nodes->size() < result->nodes->size()) result = check; }
+      else                                   { if (check->nodes->size() > result->nodes->size()) result = check; }
+    }
+
+    return result;
+  };
+
+  // Steal nodes from the largest swarm and add to starving swarm
+  for (swarm_id_and_nodes *starving_swarm = find_swarm(find_type::smallest_swarm, starving_swarms);
+       starving_swarm && starving_swarm->nodes->size() < MIN_SWARM_SIZE;
+       starving_swarm = find_swarm(find_type::smallest_swarm, starving_swarms))
+  {
+    bool still_have_fat_swarms = false;
+    for (swarm_id_and_nodes *fat_swarm = find_swarm(find_type::largest_swarm, fat_swarms);
+         fat_swarm && fat_swarm->nodes->size() > MIN_SWARM_SIZE;
+         fat_swarm = find_swarm(find_type::largest_swarm, fat_swarms))
+    {
+      still_have_fat_swarms = true;
+      public_key const &snode_key = fat_swarm->nodes->back(); // TODO(doyle): not always the back one pls
+      service_node_info &snode    = m_service_nodes_infos[snode_key];
+      snode.swarm_id              = starving_swarm->id;
+      ++snode.num_times_moved_swarms;
+      ++this->lifetime_stat.num_times_nodes_stolen;
+      ++this->stats.movements;
+
+      starving_swarm->nodes->push_back(snode_key);
+      fat_swarm->nodes->erase(--fat_swarm->nodes->end());
+
+      if (starving_swarm->nodes->size() >= MIN_SWARM_SIZE)
+      {
+        break;
+      }
+    }
+
+    if (!still_have_fat_swarms)
+    {
+      break;
+    }
+  }
+
+  // Check overflowing swarms
+  for (auto &it : m_swarms)
+  {
+    swarm_id_and_nodes swarm = {};
+    swarm.id    = it.first;
+    swarm.nodes = &it.second;
+
+    if (swarm.nodes->size() <= MAX_SWARM_SIZE)
+    {
+      continue;
+    }
+
+    uint64_t rng_seed = 0;
+    std::memcpy(&rng_seed, block_hash.data, sizeof(rng_seed));
+    rng_seed += swarm.id;
+
+    std::mt19937_64 rng(rng_seed);
+    bool move_to_new_swarm = (bool)uniform_distribution_portable(rng, 2);
+
+    swarm_id_and_nodes new_swarm = {};
+    new_swarm.id                 = uniform_distribution_portable(rng, UINT64_MAX);
+    new_swarm.nodes              = &m_swarms[new_swarm.id];
+    new_swarm.nodes->reserve(static_cast<size_t>(swarm.nodes->size() * 0.5f));
+
+    for (auto it = swarm.nodes->begin();
+         it != swarm.nodes->end();
+         ++it, move_to_new_swarm = !move_to_new_swarm)
+    {
+      if (!move_to_new_swarm)
+        continue;
+
+      public_key const &snode_key = *it;
+      service_node_info &snode    = m_service_nodes_infos[snode_key];
+      snode.swarm_id              = new_swarm.id;
+      new_swarm.nodes->push_back(snode_key);
+
+      ++snode.num_times_moved_swarms;
+      ++this->stats.movements;
+      it = --swarm.nodes->erase(it);
+    }
+  }
+
+  // TODO(doyle): Check insufficient swarms
+
 }

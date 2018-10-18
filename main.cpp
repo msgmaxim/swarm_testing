@@ -184,6 +184,20 @@ void after_testing_evaluate_swarm(char const *algorithm_name,
   float avg_swarm_size = 0;
   std::vector<swarm_counts> swarm_sizes;
 
+  int highest_move_count = -1;
+  int lowest_move_count  = INT32_MAX;
+  for (auto const &it : all_snode_info)
+  {
+    public_key const &key = it.first;
+    service_node_info const &info = it.second;
+
+    if (info.num_times_moved_swarms > highest_move_count)
+      highest_move_count = info.num_times_moved_swarms;
+
+    if (info.num_times_moved_swarms < lowest_move_count)
+      lowest_move_count = info.num_times_moved_swarms;
+  }
+
   for (size_t swarm_index = 0; swarm_index < all_swarms.size(); ++swarm_index)
   {
     swarm_info const *swarm = &all_swarms[swarm_index];
@@ -211,12 +225,14 @@ void after_testing_evaluate_swarm(char const *algorithm_name,
 
   avg_swarm_size /= (float)all_swarms.size();
   printf("[%s]\n", algorithm_name);
-  printf("  Num Swarms                   %zu/%zu\n", num_active, all_swarms.size());
-  printf("  Avg Swarm Size               %05.2f\n", avg_swarm_size);
-  printf("  Num Nodes Stolen             %d\n", lifetime_stat.num_times_nodes_stolen);
-  printf("  Num Swarm Count Changes      %d\n", lifetime_stat.num_swarm_count_changes);
-  printf("  Num Times Nodes Moved Swarms %d\n", (int)stat.movements); // TODO: Im treating this as a count over the lifetime of the entire test
-  printf("  Num Times Swarm Died         %d\n", lifetime_stat.num_times_swarm_died);
+  printf("  Num Swarms                      %zu/%zu\n", num_active, all_swarms.size());
+  printf("  Avg Swarm Size                  %05.2f\n", avg_swarm_size);
+  printf("  Num Nodes Stolen                %d\n", lifetime_stat.num_times_nodes_stolen);
+  printf("  Num Swarm Count Changes         %d\n", lifetime_stat.num_swarm_count_changes);
+  printf("  Num Times Nodes Moved Swarms    %d\n", (int)stat.movements); // TODO: Im treating this as a count over the lifetime of the entire test
+  printf("  Num Times Swarm Died            %d\n", lifetime_stat.num_times_swarm_died);
+  printf("  Highest Times Node Moved Swarms %d\n", highest_move_count);
+  printf("  Lowest Times Node Moved Swarms  %d\n", lowest_move_count);
 
   std::sort(swarm_sizes.begin(), swarm_sizes.end(), [](swarm_counts const &a, swarm_counts const &b) {
     return !(a.swarm_size < b.swarm_size);
@@ -290,18 +306,18 @@ int main(int argc, char **argv)
         SnodeEvent const *snode_event = &event.snode_events[tx_index];
         if (snode_event->type == SnodeEvent::Type::REG)
         {
-          SwarmID id = jcktm.add_new_snode_to_swarm(snode_event->pubkey, event.block_hash, tx_index);
+          jcktm.add_new_snode_to_swarm(snode_event->pubkey, event.block_hash, tx_index);
         }
         else if (snode_event->type == SnodeEvent::Type::DEREG)
         {
-          SwarmID id = jcktm.remove_snode_from_swarm(snode_event->pubkey);
+          jcktm.remove_snode_from_swarm(snode_event->pubkey);
         }
       }
 
-      std::vector<swarm_info> all_swarms = jcktm.get_swarms(swarm_jcktm::add_low_count_swarms::yes);
-      if (jcktm.lifetime_stat.last_swarm_count != all_swarms.size())
+      jcktm.after_all_add_and_remove_swarms(event.block_hash);
+      if (jcktm.lifetime_stat.last_swarm_count != jcktm.m_swarms.size())
       {
-        jcktm.lifetime_stat.last_swarm_count = all_swarms.size();
+        jcktm.lifetime_stat.last_swarm_count = jcktm.m_swarms.size();
         jcktm.lifetime_stat.num_swarm_count_changes++;
       }
     }
