@@ -12,6 +12,65 @@
 // available in the queue.
 constexpr size_t SWARM_BUFFER = 4;
 
+static int count_bits(unsigned char byte)
+{
+    int dist = 0;
+
+    while (byte != 0) {
+        dist++;
+        byte &= byte - 1;
+    }
+
+    return dist;
+}
+
+
+static size_t get_distance(const public_key& pubkey, SwarmID swarm_id)
+{
+    char data[32];
+    memcpy(data + 0 * sizeof(swarm_id), &swarm_id, sizeof(swarm_id));
+    memcpy(data + 1 * sizeof(swarm_id), &swarm_id, sizeof(swarm_id));
+    memcpy(data + 2 * sizeof(swarm_id), &swarm_id, sizeof(swarm_id));
+    memcpy(data + 3 * sizeof(swarm_id), &swarm_id, sizeof(swarm_id));
+
+    size_t distance = 0;
+
+    for (size_t i = 0; i < sizeof(data); i++) {
+        distance += count_bits(((unsigned char)data[i]) ^ (unsigned char)pubkey.data[i]);
+    }
+
+    return distance;
+}
+
+static std::vector<SwarmID> get_swarm_ids(std::map<public_key, service_node_info>& infos)
+{
+    std::map<SwarmID, size_t> counts;
+    for (const auto& entry : infos)
+      counts[entry.second.swarm_id]++;
+
+    std::vector<SwarmID> swarm_ids;
+    swarm_ids.reserve(counts.size());
+    for (const auto& entry : counts)
+      if (entry.second >= MIN_SWARM_SIZE)
+        swarm_ids.push_back(entry.first);
+    return swarm_ids;
+}
+
+static SwarmID get_swarm_id_for_pubkey(std::map<public_key, service_node_info>& infos, const public_key& pk)
+{
+    std::vector<SwarmID> swarms_ids = get_swarm_ids(infos);
+
+    auto best = std::make_pair<size_t, SwarmID>(1024, 0);
+    for (const auto& swarm_id : swarms_ids) {
+        const auto dist = get_distance(pk, swarm_id);
+        /// Note: this results in swarms with smaller ids
+        /// having more users assigned to them
+        best = std::min(best, std::make_pair(dist, swarm_id));
+    }
+
+    return best.second;
+}
+
 std::vector<uint64_t> get_swarm_ids(const std::map<public_key, service_node_info>& m_service_nodes_infos)
 {
   std::map<uint64_t, size_t> counts;

@@ -173,9 +173,11 @@ void after_testing_evaluate_swarm(char const *algorithm_name,
     }
   }
 
+  const auto num_active = std::count_if(all_swarms.begin(), all_swarms.end(), [](const swarm_info& si){ return si.size >= MIN_SWARM_SIZE; });
+
   avg_swarm_size /= (float)all_swarms.size();
   printf("[%s]\n", algorithm_name);
-  printf("  Num Swarms                   %zu\n", all_swarms.size());
+  printf("  Num Swarms                   %zu/%zu\n", num_active, all_swarms.size());
   printf("  Avg Swarm Size               %05.2f\n", avg_swarm_size);
   printf("  Num Nodes Stolen             %d\n", lifetime_stat.num_times_nodes_stolen);
   printf("  Num Swarm Count Changes      %d\n", lifetime_stat.num_swarm_count_changes);
