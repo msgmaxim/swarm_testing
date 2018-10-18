@@ -39,6 +39,8 @@ struct swarm_info
   uint16_t size;
 };
 
+SwarmID get_swarm_id_for_pubkey(const std::vector<swarm_info>& swarms, const public_key& pk);
+
 class swarms {
 
 private:

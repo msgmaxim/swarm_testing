@@ -56,16 +56,14 @@ static std::vector<SwarmID> get_swarm_ids(std::map<public_key, service_node_info
     return swarm_ids;
 }
 
-static SwarmID get_swarm_id_for_pubkey(std::map<public_key, service_node_info>& infos, const public_key& pk)
+SwarmID get_swarm_id_for_pubkey(const std::vector<swarm_info>& swarms, const public_key& pk)
 {
-    std::vector<SwarmID> swarms_ids = get_swarm_ids(infos);
-
     auto best = std::make_pair<size_t, SwarmID>(1024, 0);
-    for (const auto& swarm_id : swarms_ids) {
-        const auto dist = get_distance(pk, swarm_id);
+    for (const auto& swarm_info : swarms) {
+        const auto dist = get_distance(pk, swarm_info.id);
         /// Note: this results in swarms with smaller ids
         /// having more users assigned to them
-        best = std::min(best, std::make_pair(dist, swarm_id));
+        best = std::min(best, std::make_pair(dist, swarm_info.id));
     }
 
     return best.second;
@@ -83,21 +81,10 @@ std::vector<uint64_t> get_swarm_ids(const std::map<public_key, service_node_info
   return swarm_ids;
 }
 
-static uint64_t get_new_node_swarm_id(uint64_t seed, const std::map<public_key, service_node_info>& sn_infos)
+static uint64_t get_new_swarm_id(uint64_t seed)
 {
-  // XXX XXX XXX improvement proposal: have the swarm id be "remembered" from
-  // the last time, if the new node was already registered before. This would
-  // have huge performance gains preventing nodes from having to resync every
-  // time they rejoin the network.
-
-  std::vector<uint64_t> swarm_ids = get_swarm_ids(sn_infos);
-
   std::mt19937_64 mersenne_twister(seed);
-
-  const size_t swarm_index = (size_t)uniform_distribution_portable(mersenne_twister, swarm_ids.size());
-
-//   return swarm_ids[swarm_index];
-  return swarm_ids.size();
+  return uniform_distribution_portable(mersenne_twister, UINT64_MAX);
 }
 
 swarms::swarms(std::map<public_key, service_node_info>& infos)
@@ -181,7 +168,7 @@ void swarms::process_block(const hash32& hash, Stats& stats) {
 
       /// shuffle the queue and select MAX_SWARM_SIZE first elements
 
-      const auto new_swarm_id = get_new_node_swarm_id(seed + swarm_queue.size(), m_service_nodes_infos); /// TODO: do I really need to pass index here?
+      const auto new_swarm_id = get_new_swarm_id(seed + swarm_queue.size());
 
       loki_shuffle(swarm_queue, seed + new_swarm_id);
 
@@ -232,7 +219,6 @@ void swarm_jcktm::add_new_snode_to_swarm(public_key const &snode_public_key,
                                          hash32 const &block_hash,
                                          uint64_t tx_index)
 {
-  // get_new_node_swarm_id
   std::vector<swarm_info> valid_swarms = this->get_swarms(add_low_count_swarms::no);
   swarm_info *desired_swarm = nullptr;
   {

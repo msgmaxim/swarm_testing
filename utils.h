@@ -57,4 +57,8 @@ void loki_shuffle(std::vector<T>& a, uint64_t seed)
   }
 }
 
+float calc_mean(const std::vector<size_t>& vec);
+
+float standard_deviation(const std::vector<size_t>& vec);
+
 #endif // UTILS_H

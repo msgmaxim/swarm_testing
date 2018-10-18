@@ -113,6 +113,20 @@ std::vector<Event> generate_random_events(int num_events) {
 
 }
 
+static std::vector<public_key> generate_random_users(size_t num_users)
+{
+  std::vector<public_key> users;
+  users.reserve(num_users);
+
+  for (auto i = 0u; i < num_users; ++i) {
+    secret_key dummy_key   = {};
+    public_key pub_key;
+    generate_keys(pub_key, dummy_key);
+    users.push_back(pub_key);
+  }
+
+  return users;
+}
 
 size_t count_movements(const std::map<public_key, service_node_info>& prev,
                        const std::map<public_key, service_node_info>& cur)
@@ -133,6 +147,26 @@ size_t count_movements(const std::map<public_key, service_node_info>& prev,
 
   return movements;
 
+}
+
+std::map<SwarmID, std::vector<public_key>> map_users_to_swarms(const std::vector<swarm_info>& swarms, const std::vector<public_key>& users) {
+  std::map<SwarmID, std::vector<public_key>> swarm2pks;
+
+  for (const auto& user : users) {
+    swarm2pks[get_swarm_id_for_pubkey(swarms, user)].push_back(user);
+  }
+  return swarm2pks;
+}
+
+void print_identity_mapping(const std::map<SwarmID, std::vector<public_key>>& swarm2pks) {
+  std::vector<size_t> counts;
+
+  for (const auto& entry : swarm2pks) {
+    std::cout << entry.second.size() << " ";
+    counts.push_back(entry.second.size());
+  }
+  std::cout << "\n";
+  std::cout << "standard deviation: " << standard_deviation(counts) << std::endl;
 }
 
 void after_testing_evaluate_swarm(char const *algorithm_name,
@@ -238,6 +272,9 @@ int main(int argc, char **argv)
   }
 
   std::vector<Event> const events = generate_random_events(num_events);
+
+  const std::vector<public_key> users = generate_random_users(10000);
+
   swarm_jcktm jcktm = {};
   {
     for (Event const &event : events)

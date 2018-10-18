@@ -1,5 +1,6 @@
 #include "utils.h"
 #include "crypto-ops.h"
+#include <cmath>
 
 pcg32_random_t global_rng = {0, 0x70eae936f6bca02d};
 
@@ -89,4 +90,26 @@ int choose_n(int max_val_not_inclusive)
   uint32_t random_number = pcg32_random_r(&global_rng);
   uint32_t result        = random_number % max_val_not_inclusive;
   return result;
+}
+
+float calc_mean(const std::vector<size_t>& vec) {
+  size_t sum = 0;
+
+  for (size_t a : vec) { sum += a; }
+
+  return (float)sum / vec.size();
+}
+
+float standard_deviation(const std::vector<size_t>& vec) {
+
+  const auto mean = calc_mean(vec);
+
+  float sum = 0;
+
+  for (size_t a : vec) {
+    sum += pow(a - mean, 2);
+  }
+
+  return sqrt((sum / vec.size()));
+
 }
