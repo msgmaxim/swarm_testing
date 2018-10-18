@@ -271,11 +271,17 @@ int main(int argc, char **argv)
     return 0;
   }
 
+  // const auto events = read_events("sn_registration_data.txt");
   std::vector<Event> const events = generate_random_events(num_events);
 
   const std::vector<public_key> users = generate_random_users(10000);
 
   swarm_jcktm jcktm = {};
+
+  constexpr bool RUN_JCKTM        = true;
+  constexpr bool RUN_QUEUE_BUFFER = true;
+
+  if (RUN_JCKTM)
   {
     for (Event const &event : events)
     {
@@ -284,11 +290,11 @@ int main(int argc, char **argv)
         SnodeEvent const *snode_event = &event.snode_events[tx_index];
         if (snode_event->type == SnodeEvent::Type::REG)
         {
-          jcktm.add_new_snode_to_swarm(snode_event->pubkey, event.block_hash, tx_index);
+          SwarmID id = jcktm.add_new_snode_to_swarm(snode_event->pubkey, event.block_hash, tx_index);
         }
         else if (snode_event->type == SnodeEvent::Type::DEREG)
         {
-          jcktm.remove_snode_from_swarm(snode_event->pubkey);
+          SwarmID id = jcktm.remove_snode_from_swarm(snode_event->pubkey);
         }
       }
 
@@ -301,53 +307,54 @@ int main(int argc, char **argv)
     }
   }
 
-  constexpr bool MUTE_COUT = true;
-  std::streambuf *old = std::cout.rdbuf();
-  if (MUTE_COUT)
-  {
-      std::cout.rdbuf(nullptr);
-  }
-
   std::map<public_key, service_node_info> m_service_nodes_infos;
   swarms swarms_(m_service_nodes_infos);
-
-  // const auto events = read_events("sn_registration_data.txt");
   std::vector<Stats> stats;
-  uint64_t prev_h = 0;
-  for (const auto e : events)
+  if (RUN_QUEUE_BUFFER)
   {
-    if (e.height > prev_h)
+    constexpr bool MUTE_COUT = true;
+    std::streambuf *old = std::cout.rdbuf();
+    if (MUTE_COUT)
     {
-
-      if (prev_h != 0)
-      {
-        stats.push_back({});
-        auto prev_state = m_service_nodes_infos;
-        swarms_.process_block(e.block_hash, stats.back());
-        stats.back().movements = count_movements(prev_state, m_service_nodes_infos);
-      }
-
-      prev_h = e.height;
+        std::cout.rdbuf(nullptr);
     }
 
-    for (SnodeEvent const &snode_event : e.snode_events)
+    uint64_t prev_h = 0;
+    for (const auto e : events)
     {
-      if (snode_event.type == SnodeEvent::Type::REG)
+      if (e.height > prev_h)
       {
-        m_service_nodes_infos.insert({snode_event.pubkey, {}});
-        swarms_.process_reg(snode_event.pubkey);
+
+        if (prev_h != 0)
+        {
+          stats.push_back({});
+          auto prev_state = m_service_nodes_infos;
+          swarms_.process_block(e.block_hash, stats.back());
+          stats.back().movements = count_movements(prev_state, m_service_nodes_infos);
+        }
+
+        prev_h = e.height;
       }
-      else if (snode_event.type == SnodeEvent::Type::DEREG)
+
+      for (SnodeEvent const &snode_event : e.snode_events)
       {
-        swarms_.process_dereg(snode_event.pubkey);
-        m_service_nodes_infos.erase(snode_event.pubkey);
+        if (snode_event.type == SnodeEvent::Type::REG)
+        {
+          m_service_nodes_infos.insert({snode_event.pubkey, {}});
+          swarms_.process_reg(snode_event.pubkey);
+        }
+        else if (snode_event.type == SnodeEvent::Type::DEREG)
+        {
+          swarms_.process_dereg(snode_event.pubkey);
+          m_service_nodes_infos.erase(snode_event.pubkey);
+        }
       }
     }
-  }
 
-  if (MUTE_COUT)
-  {
-    std::cout.rdbuf(old);
+    if (MUTE_COUT)
+    {
+      std::cout.rdbuf(old);
+    }
   }
 
   // Global information
@@ -361,13 +368,13 @@ int main(int argc, char **argv)
       printf("\n");
   }
 
-  // jcktm stats
+  if (RUN_JCKTM) // jcktm stats
   {
     std::vector<swarm_info> all_swarms = jcktm.get_swarms(swarm_jcktm::add_low_count_swarms::yes);
     after_testing_evaluate_swarm("Jcktm Algorithm", jcktm.m_service_nodes_infos, jcktm.lifetime_stat, jcktm.stats, all_swarms);
   }
 
-  // queue algo stats
+  if (RUN_QUEUE_BUFFER) // queue algo stats
   {
     std::vector<swarm_info> all_swarms;
     {
@@ -388,17 +395,18 @@ int main(int argc, char **argv)
     lifetime_stats lifetime_stat = {};
     Stats stats_tmp = {};
     after_testing_evaluate_swarm("QueueBuffer Algorithm", m_service_nodes_infos, lifetime_stat, stats_tmp, all_swarms);
+
+    // accumulate stats
+    size_t total_inactive  = 0;
+    size_t total_movements = 0;
+    for (const auto &s : stats)
+    {
+      total_inactive += s.inactive_count;
+      total_movements += s.movements;
+    }
+
+    std::cout << "inactive nodes mean: " << total_inactive / stats.size() << std::endl;
+    std::cout << "total movements: " << total_movements << std::endl;
   }
 
-  // accumulate stats
-  size_t total_inactive  = 0;
-  size_t total_movements = 0;
-  for (const auto &s : stats)
-  {
-    total_inactive += s.inactive_count;
-    total_movements += s.movements;
-  }
-
-  std::cout << "inactive nodes mean: " << total_inactive / stats.size() << std::endl;
-  std::cout << "total movements: " << total_movements << std::endl;
 }

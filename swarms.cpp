@@ -215,9 +215,9 @@ std::vector<swarm_info> swarm_jcktm::get_swarms(add_low_count_swarms add) const
   return valid_swarms;
 }
 
-void swarm_jcktm::add_new_snode_to_swarm(public_key const &snode_public_key,
-                                         hash32 const &block_hash,
-                                         uint64_t tx_index)
+SwarmID swarm_jcktm::add_new_snode_to_swarm(public_key const &snode_public_key,
+                                            hash32 const &block_hash,
+                                            uint64_t tx_index)
 {
   std::vector<swarm_info> valid_swarms = this->get_swarms(add_low_count_swarms::no);
   swarm_info *desired_swarm = nullptr;
@@ -263,9 +263,11 @@ void swarm_jcktm::add_new_snode_to_swarm(public_key const &snode_public_key,
       }
     }
   }
+
+  return m_service_nodes_infos[snode_public_key].swarm_id;
 }
 
-void swarm_jcktm::remove_snode_from_swarm(public_key const &snode_key)
+SwarmID swarm_jcktm::remove_snode_from_swarm(public_key const &snode_key)
 {
   assert(m_service_nodes_infos.find(snode_key) != m_service_nodes_infos.end());
   uint64_t const swarm_id = m_service_nodes_infos[snode_key].swarm_id;
@@ -281,7 +283,7 @@ void swarm_jcktm::remove_snode_from_swarm(public_key const &snode_key)
     if (it == all_swarms.end()) // last node in swarm was deleted
     {
         ++this->lifetime_stat.num_times_swarm_died;
-        return;
+        return swarm_id;
     }
 
     starving_swarm = &(*it);
@@ -339,4 +341,6 @@ void swarm_jcktm::remove_snode_from_swarm(public_key const &snode_key)
     //         when nodes have been decomissioned for more than 10 blocks,
     //         move the nodes into new swarms immediately.
   }
+
+  return swarm_id;
 }

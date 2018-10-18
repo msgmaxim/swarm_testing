@@ -64,8 +64,8 @@ struct swarm_jcktm
 
     enum struct add_low_count_swarms { no, yes, };
     std::vector<swarm_info> get_swarms               (add_low_count_swarms add) const;
-    void                    add_new_snode_to_swarm   (public_key const &snode_public_key, hash32 const &block_hash, uint64_t tx_index);
-    void                    remove_snode_from_swarm  (const public_key& snode_key);
+    SwarmID                 add_new_snode_to_swarm   (public_key const &snode_public_key, hash32 const &block_hash, uint64_t tx_index);
+    SwarmID                 remove_snode_from_swarm  (const public_key& snode_key);
 };
 
 #endif // SWARMS_H
