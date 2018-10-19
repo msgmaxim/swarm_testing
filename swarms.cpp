@@ -101,7 +101,17 @@ void swarms::process_dereg(const public_key& pk) {
     assert(m_service_nodes_infos.find(pk) != m_service_nodes_infos.end());
 }
 
+std::vector<public_key> swarms::get_snodes() const {
+    std::vector<public_key> result;
+    result.reserve(m_service_nodes_infos.size());
+    for (const auto& entry : m_service_nodes_infos) {
+        result.push_back(entry.first);
+    }
+    return result;
+}
+
 void swarms::process_block(const hash32& hash, Stats& stats) {
+
     std::cout << "--- process block ---\n";
 
     std::map<SwarmID, size_t> swarm_sizes;
@@ -189,10 +199,10 @@ void swarms::process_block(const hash32& hash, Stats& stats) {
     stats.inactive_count += swarm_queue.size();
 }
 
-std::vector<swarm_info> swarm_jcktm::get_swarms(add_low_count_swarms add) const
+std::vector<swarm_info> get_swarms(const std::map<public_key, service_node_info>& sn_infos, add_low_count_swarms add)
 {
   std::map<uint64_t, size_t> swarm_id_and_size;
-  for (const auto &entry : m_service_nodes_infos)
+  for (const auto &entry : sn_infos)
     swarm_id_and_size[entry.second.swarm_id]++;
 
   std::vector<swarm_info> valid_swarms;
@@ -213,6 +223,11 @@ std::vector<swarm_info> swarm_jcktm::get_swarms(add_low_count_swarms add) const
   }
 
   return valid_swarms;
+}
+
+std::vector<swarm_info> swarm_jcktm::get_swarms(add_low_count_swarms add) const
+{
+  return ::get_swarms(m_service_nodes_infos, add);
 }
 
 void swarm_jcktm::add_new_snode_to_swarm(public_key const &snode_public_key,

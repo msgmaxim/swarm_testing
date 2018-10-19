@@ -6,7 +6,7 @@
 
 typedef struct ec_scalar {
     unsigned char data[32];
-    bool operator<(const ec_scalar &other) const  { return memcmp(this->data, other.data, sizeof(data)) < 0; }
+    bool operator<(const ec_scalar &other) const { return memcmp(this->data, other.data, sizeof(data)) < 0; }
     bool operator==(const ec_scalar &other) const { return memcmp(this->data, other.data, sizeof(data)) == 0; }
 } secret_key, public_key, hash32, byte32;
 

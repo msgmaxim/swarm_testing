@@ -60,6 +60,8 @@ std::vector<Event> read_events(const char* path) {
 }
 #endif
 
+constexpr size_t TOTAL_USERS = 1000;
+
 int global_num_deregistrations;
 int global_num_registrations;
 std::vector<Event> generate_random_events(int num_events) {
@@ -149,13 +151,121 @@ size_t count_movements(const std::map<public_key, service_node_info>& prev,
 
 }
 
-std::map<SwarmID, std::vector<public_key>> map_users_to_swarms(const std::vector<swarm_info>& swarms, const std::vector<public_key>& users) {
+struct UserMapping {
   std::map<SwarmID, std::vector<public_key>> swarm2pks;
+  std::map<public_key, SwarmID> pk2swarm;
+};
+
+
+using InfoMap = std::map<public_key, service_node_info>;
+
+
+UserMapping map_users_to_swarms(const std::vector<swarm_info>& swarms, const std::vector<public_key>& users) {
+  UserMapping map;
 
   for (const auto& user : users) {
-    swarm2pks[get_swarm_id_for_pubkey(swarms, user)].push_back(user);
+    const auto swarm_id = get_swarm_id_for_pubkey(swarms, user);
+    map.swarm2pks[swarm_id].push_back(user);
+    map.pk2swarm.insert({user, swarm_id});
   }
-  return swarm2pks;
+
+  size_t total_users = 0;
+
+  for (const auto& si : swarms) {
+    const auto users = map.swarm2pks.at(si.id);
+    total_users += users.size();
+    // printf("swarm id: %ud has %d users\n", si.id, users.size());
+  }
+
+  if (total_users != TOTAL_USERS) {
+    printf("total swarms: %d\n", swarms.size());
+    assert(swarms.size() == 0);
+  }
+
+  return map;
+}
+
+size_t count_remapped_users(const UserMapping& prev, const UserMapping& cur)
+{
+  size_t count = 0;
+  for (const auto& entry : prev.pk2swarm) {
+    count += (entry.second != cur.pk2swarm.at(entry.first));
+  }
+  return count;
+}
+
+size_t count_remapped_swarms(const UserMapping& prev, const UserMapping& cur)
+{
+  size_t count = 0;
+  for (const auto& entry : prev.swarm2pks) {
+
+    /// Note: a swarm might not exist anymore, in which case we count it as remapped
+    const auto it = cur.swarm2pks.find(entry.first);
+    count += (it != cur.swarm2pks.end() && entry.second != it->second);
+  }
+
+  return count;
+}
+
+/// for every snode determine how many users they have been reassigned
+size_t count_data_migrations(const InfoMap& prev_infos, const InfoMap& infos, const UserMapping& prev_map, const UserMapping& map)
+{
+  size_t total = 0;
+  size_t total_users = 0;
+
+  /// for every service node
+  for (const auto& e : infos) {
+    const auto& sn_pk = e.first;
+    const auto swarm_id = e.second.swarm_id;
+
+    /// find all its current users
+    const auto it = map.swarm2pks.find(swarm_id);
+
+    if (it == map.swarm2pks.end()) {
+      /// the user is not part of any active swarm, no data migration necessary
+      continue;
+    }
+
+    const auto& users = it->second;
+
+    total_users += users.size();
+
+    /// see if the user was previuosly in a swarm
+    const auto it1 = prev_infos.find(sn_pk);
+    if (it1 == prev_infos.end()) {
+      /// the snode is new, so it downloads data for every user
+      total += users.size();
+      continue;
+    }
+
+    /// the user was previoulsy in a swarm, get its id
+    const auto prev_swarm_id = it1->second.swarm_id;
+
+    /// not all swarms exist in the user mapping, check if this one does
+    auto it2 = prev_map.swarm2pks.find(prev_swarm_id);
+    if (it2 == prev_map.swarm2pks.end()) {
+      /// same as above, all the sn needs to download data for every user
+      total += users.size();
+      continue;
+    }
+    // get all previous users
+    auto prev_users = it2->second;
+
+    /// sort so we can use binary search
+    std::sort(prev_users.begin(), prev_users.end());
+
+    /// count how many new users we have
+    size_t new_users = 0;
+    for (const auto& user : users) {
+      if (!std::binary_search(prev_users.begin(), prev_users.end(), user)) {
+        new_users++;
+      }
+    }
+
+    total += new_users;
+  }
+
+  return total;
 }
 
 void print_identity_mapping(const std::map<SwarmID, std::vector<public_key>>& swarm2pks) {
@@ -290,7 +400,7 @@ int main(int argc, char **argv)
   // const auto events = read_events("sn_registration_data.txt");
   std::vector<Event> const events = generate_random_events(num_events);
 
-  const std::vector<public_key> users = generate_random_users(10000);
+  const std::vector<public_key> users = generate_random_users(TOTAL_USERS);
 
   swarm_jcktm jcktm = {};
 
@@ -329,46 +439,55 @@ int main(int argc, char **argv)
   if (RUN_QUEUE_BUFFER)
   {
     constexpr bool MUTE_COUT = true;
-    std::streambuf *old = std::cout.rdbuf();
-    if (MUTE_COUT)
-    {
-        std::cout.rdbuf(nullptr);
+    std::streambuf* old = std::cout.rdbuf();
+    if (MUTE_COUT) {
+      std::cout.rdbuf(nullptr);
     }
 
-    uint64_t prev_h = 0;
-    for (const auto e : events)
-    {
-      if (e.height > prev_h)
-      {
+    std::vector<swarm_info> prev_swarms;
+    UserMapping prev_map;
 
-        if (prev_h != 0)
-        {
+    uint64_t prev_h = 0;
+    for (const auto e : events) {
+      if (e.height > prev_h) {
+
+        if (prev_h != 0) {
           stats.push_back({});
           auto prev_state = m_service_nodes_infos;
+
           swarms_.process_block(e.block_hash, stats.back());
           stats.back().movements = count_movements(prev_state, m_service_nodes_infos);
+
+          const auto cur_swarms = get_swarms(m_service_nodes_infos, add_low_count_swarms::no);
+          const auto cur_map = map_users_to_swarms(cur_swarms, users);
+
+          const auto remapped_users = count_remapped_users(prev_map, cur_map);
+          const auto remapped_swarms = count_remapped_swarms(prev_map, cur_map);
+
+          const auto migrations = count_data_migrations(prev_state, m_service_nodes_infos, prev_map, cur_map);
+          printf(
+            "remapped users/swarms: %4d /%4d (total swarms: %d)\n", remapped_users, remapped_swarms, cur_swarms.size());
+          printf("migration: %d\n", migrations);
+
+          prev_swarms = cur_swarms;
+          prev_map = cur_map;
         }
 
         prev_h = e.height;
       }
 
-      for (SnodeEvent const &snode_event : e.snode_events)
-      {
-        if (snode_event.type == SnodeEvent::Type::REG)
-        {
-          m_service_nodes_infos.insert({snode_event.pubkey, {}});
+      for (SnodeEvent const& snode_event : e.snode_events) {
+        if (snode_event.type == SnodeEvent::Type::REG) {
+          m_service_nodes_infos.insert({ snode_event.pubkey, {} });
           swarms_.process_reg(snode_event.pubkey);
-        }
-        else if (snode_event.type == SnodeEvent::Type::DEREG)
-        {
+        } else if (snode_event.type == SnodeEvent::Type::DEREG) {
           swarms_.process_dereg(snode_event.pubkey);
           m_service_nodes_infos.erase(snode_event.pubkey);
         }
       }
     }
 
-    if (MUTE_COUT)
-    {
+    if (MUTE_COUT) {
       std::cout.rdbuf(old);
     }
   }
@@ -386,27 +505,13 @@ int main(int argc, char **argv)
 
   if (RUN_JCKTM) // jcktm stats
   {
-    std::vector<swarm_info> all_swarms = jcktm.get_swarms(swarm_jcktm::add_low_count_swarms::yes);
+    std::vector<swarm_info> all_swarms = jcktm.get_swarms(add_low_count_swarms::yes);
     after_testing_evaluate_swarm("Jcktm Algorithm", jcktm.m_service_nodes_infos, jcktm.lifetime_stat, jcktm.stats, all_swarms);
   }
 
   if (RUN_QUEUE_BUFFER) // queue algo stats
   {
-    std::vector<swarm_info> all_swarms;
-    {
-      std::map<uint64_t, size_t> swarm_id_and_size;
-      for (const auto &entry : m_service_nodes_infos)
-        swarm_id_and_size[entry.second.swarm_id]++;
-
-      all_swarms.reserve(swarm_id_and_size.size());
-      for (const auto &entry : swarm_id_and_size)
-      {
-        swarm_info swarm = {};
-        swarm.id         = entry.first;
-        swarm.size       = static_cast<uint16_t>(entry.second);
-        all_swarms.push_back(swarm);
-      }
-    }
+    std::vector<swarm_info> all_swarms = ::get_swarms(m_service_nodes_infos, add_low_count_swarms::yes);
 
     lifetime_stats lifetime_stat = {};
     Stats stats_tmp = {};
