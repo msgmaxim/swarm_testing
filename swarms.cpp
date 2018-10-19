@@ -87,6 +87,17 @@ static uint64_t get_new_swarm_id(uint64_t seed)
   return uniform_distribution_portable(mersenne_twister, UINT64_MAX);
 }
 
+static std::vector<public_key> get_snodes_in_swarm(std::map<public_key, service_node_info>& infos, SwarmID sid)
+{
+    std::vector<public_key> result;
+    for (const auto& entry : infos) {
+        if (entry.second.swarm_id == sid) {
+            result.push_back(entry.first);
+        }
+    }
+    return result;
+}
+
 swarms::swarms(std::map<public_key, service_node_info>& infos)
   : m_service_nodes_infos(infos)
 {}
@@ -173,6 +184,7 @@ void swarms::process_block(const hash32& hash, Stats& stats) {
     // 2. If we still have nodes in the queue, use them to fill in swarms above the minimal requirement
 
     /// 3. If there are still enough nodes for IDEAL_SWARM_SIZE + some safety buffer, create a new swarm
+    /// TODO: have a while loop in case there we can create multiple swarms at once
     if (swarm_queue.size() >= MAX_SWARM_SIZE + SWARM_BUFFER) {
       /// create a new swarm with MAX_SWARM_SIZE (?) nodes in it (randomly selected)
 
@@ -182,10 +194,36 @@ void swarms::process_block(const hash32& hash, Stats& stats) {
 
       loki_shuffle(swarm_queue, seed + new_swarm_id);
 
-      /// TODO: have a while loop in case there we can create multiple swarms at once
       for (auto i = 0u; i < MAX_SWARM_SIZE; ++i) {
-        const auto sn_pk = swarm_queue.at(i);
-        m_service_nodes_infos.at(sn_pk).swarm_id = new_swarm_id;
+
+        if (swarm_sizes.size() > 0) {
+
+            /// a. Select a random node form a random swarm
+
+            const auto swarm_idx = uniform_distribution_portable(mersenne_twister, swarm_sizes.size());
+
+            auto it = swarm_sizes.begin();
+            std::advance(it, swarm_idx);
+
+            const auto swarm_id = it->first;
+
+            const auto snodes = get_snodes_in_swarm(m_service_nodes_infos, swarm_id);
+
+            const auto pk_idx = uniform_distribution_portable(mersenne_twister, snodes.size());
+
+            const auto existing_pk = snodes.at(pk_idx);
+
+            /// b. Swap that node with one in the queue
+            /// c. The node will form a new swarm
+
+            m_service_nodes_infos.at(existing_pk).swarm_id = new_swarm_id;
+            const auto new_pk = swarm_queue.at(i);
+            m_service_nodes_infos.at(new_pk).swarm_id = swarm_id;
+        } else {
+            const auto new_pk = swarm_queue.at(i);
+            m_service_nodes_infos.at(new_pk).swarm_id = new_swarm_id;
+        }
+
       }
 
       std::cout << "creating a new swarm with id: " << new_swarm_id << "\n";
