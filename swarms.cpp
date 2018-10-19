@@ -247,7 +247,8 @@ void swarm_jcktm::add_new_snode_to_swarm(public_key const &snode_public_key,
     size_t desired_index = (size_t)uniform_distribution_portable(rng, m_swarms.size());
 
     auto it = m_swarms.begin();
-    for (int i = 0; i < desired_index; ++it, ++i) {}
+    std::advance(it, desired_index);
+
     swarm_id    = it->first;
     swarm_nodes = &it->second;
   }

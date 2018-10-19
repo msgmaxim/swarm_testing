@@ -19,7 +19,7 @@ constexpr size_t MIN_SWARM_SIZE = 4;
 struct Stats {
     size_t inactive_count = 0; /// nodes not participating in an "active" swarm
     size_t movements = 0; /// difference in swarm composition compared to previous (if existed)
-
+    size_t user_migrations = 0; /// the number of times a service node need to download data for a user (accumulated)
 };
 
 struct lifetime_stats
@@ -28,6 +28,7 @@ struct lifetime_stats
   int num_times_nodes_stolen;
   int last_swarm_count;
   int num_swarm_count_changes;
+  int num_user_migrations;
 };
 
 struct service_node_info {

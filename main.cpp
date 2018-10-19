@@ -178,7 +178,6 @@ UserMapping map_users_to_swarms(const std::vector<swarm_info>& swarms, const std
   }
 
   if (total_users != TOTAL_USERS) {
-    printf("total swarms: %d\n", swarms.size());
     assert(swarms.size() == 0);
   }
 
@@ -343,6 +342,7 @@ void after_testing_evaluate_swarm(char const *algorithm_name,
   printf("  Num Times Swarm Died            %d\n", lifetime_stat.num_times_swarm_died);
   printf("  Highest Times Node Moved Swarms %d\n", highest_move_count);
   printf("  Lowest Times Node Moved Swarms  %d\n", lowest_move_count);
+  printf("  User migrations                 %d\n", lifetime_stat.num_user_migrations);
 
   std::sort(swarm_sizes.begin(), swarm_sizes.end(), [](swarm_counts const &a, swarm_counts const &b) {
     return !(a.swarm_size < b.swarm_size);
@@ -411,6 +411,10 @@ int main(int argc, char **argv)
   {
     for (Event const &event : events)
     {
+
+      const auto prev_infos = jcktm.m_service_nodes_infos;
+      const auto prev_map = map_users_to_swarms(jcktm.get_swarms(add_low_count_swarms::no), users);
+
       for (size_t tx_index = 0; tx_index < event.snode_events.size(); ++tx_index)
       {
         SnodeEvent const *snode_event = &event.snode_events[tx_index];
@@ -425,6 +429,13 @@ int main(int argc, char **argv)
       }
 
       jcktm.after_all_add_and_remove_swarms(event.block_hash);
+
+      const auto cur_map = map_users_to_swarms(jcktm.get_swarms(add_low_count_swarms::no), users);
+
+      const auto migrations = count_data_migrations(prev_infos, jcktm.m_service_nodes_infos, prev_map, cur_map);
+
+      jcktm.lifetime_stat.num_user_migrations += migrations;
+
       if (jcktm.lifetime_stat.last_swarm_count != jcktm.m_swarms.size())
       {
         jcktm.lifetime_stat.last_swarm_count = jcktm.m_swarms.size();
@@ -435,7 +446,7 @@ int main(int argc, char **argv)
 
   std::map<public_key, service_node_info> m_service_nodes_infos;
   swarms swarms_(m_service_nodes_infos);
-  std::vector<Stats> stats;
+  std::vector<Stats> queue_stats;
   if (RUN_QUEUE_BUFFER)
   {
     constexpr bool MUTE_COUT = true;
@@ -452,22 +463,16 @@ int main(int argc, char **argv)
       if (e.height > prev_h) {
 
         if (prev_h != 0) {
-          stats.push_back({});
+          queue_stats.push_back({});
           auto prev_state = m_service_nodes_infos;
 
-          swarms_.process_block(e.block_hash, stats.back());
-          stats.back().movements = count_movements(prev_state, m_service_nodes_infos);
+          swarms_.process_block(e.block_hash, queue_stats.back());
+          queue_stats.back().movements = count_movements(prev_state, m_service_nodes_infos);
 
           const auto cur_swarms = get_swarms(m_service_nodes_infos, add_low_count_swarms::no);
           const auto cur_map = map_users_to_swarms(cur_swarms, users);
 
-          const auto remapped_users = count_remapped_users(prev_map, cur_map);
-          const auto remapped_swarms = count_remapped_swarms(prev_map, cur_map);
-
-          const auto migrations = count_data_migrations(prev_state, m_service_nodes_infos, prev_map, cur_map);
-          printf(
-            "remapped users/swarms: %4d /%4d (total swarms: %d)\n", remapped_users, remapped_swarms, cur_swarms.size());
-          printf("migration: %d\n", migrations);
+          queue_stats.back().user_migrations += count_data_migrations(prev_state, m_service_nodes_infos, prev_map, cur_map);
 
           prev_swarms = cur_swarms;
           prev_map = cur_map;
@@ -513,20 +518,24 @@ int main(int argc, char **argv)
   {
     std::vector<swarm_info> all_swarms = ::get_swarms(m_service_nodes_infos, add_low_count_swarms::yes);
 
-    lifetime_stats lifetime_stat = {};
-    Stats stats_tmp = {};
-    after_testing_evaluate_swarm("QueueBuffer Algorithm", m_service_nodes_infos, lifetime_stat, stats_tmp, all_swarms);
 
     // accumulate stats
     size_t total_inactive  = 0;
     size_t total_movements = 0;
-    for (const auto &s : stats)
+    size_t total_migrations = 0;
+    for (const auto &s : queue_stats)
     {
       total_inactive += s.inactive_count;
       total_movements += s.movements;
+      total_migrations += s.user_migrations;
     }
 
-    std::cout << "inactive nodes mean: " << total_inactive / stats.size() << std::endl;
+    lifetime_stats lifetime_stat = {};
+    Stats stats_tmp = {};
+    lifetime_stat.num_user_migrations = total_migrations;
+    after_testing_evaluate_swarm("QueueBuffer Algorithm", m_service_nodes_infos, lifetime_stat, stats_tmp, all_swarms);
+
+    std::cout << "inactive nodes mean: " << total_inactive / queue_stats.size() << std::endl;
     std::cout << "total movements: " << total_movements << std::endl;
   }
 
